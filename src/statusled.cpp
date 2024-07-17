@@ -60,23 +60,20 @@ void StatusLed::set_internal(uint8_t pin, StatusLed::status_t s, int time_on, in
     }
 }
 
-StatusLed::StatusLed() { // Default stupid constructor using LED 2... 3 times. No clue how that would work in reality
-    StatusLed(2,2,2); 
-}
+StatusLed::StatusLed() : StatusLed(2,2,2) {} // Default stupid constructor using LED 2... 3 times. No clue how that would work in reality
 
-StatusLed::StatusLed(uint8_t p[]) { // Constructor using array, expects EXACTLY 3 elements (more will be ignored, less will segfault)
-    StatusLed(p[0], p[1], p[2]);
-}
+StatusLed::StatusLed(uint8_t p[]) : StatusLed(p[0], p[1], p[2]) {} // Constructor using array, expects EXACTLY 3 elements (more will be ignored, less will segfault)
+
 StatusLed::StatusLed(uint8_t p0, uint8_t p1, uint8_t p2) { // Constructor using direct separate pin numbers
     // Initialize all variables
-    for(auto s : LED_Status)    { s = status_t::off; }
-    for(auto o : outputs)       { o = false; }
+    for(auto& s : LED_Status)    { s = status_t::off; }
+    for(auto& o : outputs)       { o = false; }
     pins[0] = p0;
     pins[1] = p1;
     pins[2] = p2;
-    for(auto t : on_times)      { t = 0; }
-    for(auto t : off_times)     { t = 0; }
-    for(auto n : next_times)    { n = (unsigned long) -1; } // Default to "never" check times (this number be big)
+    for(auto& t : on_times)      { t = 0; }
+    for(auto& t : off_times)     { t = 0; }
+    for(auto& n : next_times)    { n = (unsigned long) -1; } // Default to "never" check times (this number be big)
     min_time = (unsigned long) -1;    
 }
 

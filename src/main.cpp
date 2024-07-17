@@ -1,11 +1,7 @@
 /*
 ESP32 Wifi DMX Bridge - based on sample projects cobbled together and expanded...
-
-
  */
 #include "main.h"
-
-
 
 #define ESP_WPS_MODE      WPS_TYPE_PBC
 #define ESP_MANUFACTURER  "ESPRESSIF"
@@ -15,30 +11,47 @@ ESP32 Wifi DMX Bridge - based on sample projects cobbled together and expanded..
 
 static esp_wps_config_t config;
 
+// Server stuff
+WiFiServer server(80);
 const char* ssid     = "";
 const char* password = "";
 
-TaskHandle_t ADCTask, LEDTask;
-int ADCArray[60];
-int ADCArraySize = sizeof(ADCArray) / sizeof(ADCArray[0]);
-int ADCAverage = 0;
+// OS stuff
+TaskHandle_t ADCTask, LEDTask, DMXTask;
 
-#define DMXArraySize 256
-char DMXArray[DMXArraySize];
-
-
+// Pin definitions
 #define LED 2
 #define LED_G 18
 #define LED_B 19
 #define LED_R 21
 #define VBAT 35
 #define VEXT 39
+#define DMX_RX 16
+#define DMX_TX 17
+#define DMX_EN 22
+
+//LEDs
+StatusLed leds(LED_G, LED_B, LED_R);
+
+// ADC variables
+int ADCArray[60];
+int ADCArraySize = sizeof(ADCArray) / sizeof(ADCArray[0]);
+int ADCAverage = 0;
 int vbatval = 0;
 int vextval = 0;
 int temp = 0;
 
-WiFiServer server(80);
-StatusLed leds(LED_G, LED_B, LED_R);
+// DMX stuff
+#define DMXArraySize 512
+byte DMXArray[DMXArraySize];
+volatile dmxsemaphore_t DMXupdate = dmxsemaphore_t::free; // Semaphore to allow usage of DMXArray
+
+int transmitPin = DMX_TX;
+int receivePin = DMX_RX;
+int enablePin = DMX_EN;
+dmx_port_t dmxPort = 1;
+byte DMXdata[DMX_PACKET_SIZE];
+
 
 void wpsInitConfig(){
   config.wps_type = ESP_WPS_MODE;
@@ -121,80 +134,77 @@ void WiFiEvent(WiFiEvent_t event, arduino_event_info_t info){
 
 void setup()
 {
-    Serial.begin(115200);
-    pinMode(LED, OUTPUT);      // set the LED pin mode
-    pinMode(LED_R, OUTPUT);
-    pinMode(LED_G, OUTPUT);
-    pinMode(LED_B, OUTPUT);
-    pinMode(VBAT, INPUT);
-    pinMode(VEXT, INPUT);
-    
-    delay(1000);
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);      // set the LED pin mode
+  pinMode(LED_R, OUTPUT);
+  pinMode(LED_G, OUTPUT);
+  pinMode(LED_B, OUTPUT);
+  pinMode(VBAT, INPUT);
+  pinMode(VEXT, INPUT);
+  
+  // DMX setup
+  memset(DMXArray, 0, DMXArraySize);
+  memset(DMXdata, 0, DMX_PACKET_SIZE);
 
-/*
-    digitalWrite(LED_R, HIGH);
+  dmx_config_t DMXconfig = DMX_CONFIG_DEFAULT;
+  dmx_personality_t personalities[] = {};
+  int personality_count = 0;
+  dmx_driver_install(dmxPort, &DMXconfig, personalities, personality_count);
+
+  // Set DMX hardware pins
+  dmx_set_pin(dmxPort, transmitPin, receivePin, enablePin);
+
+  // All done, wait a bit to let things settle for no particular reason.
+  delay(1000);
+
+  //xTaskCreatePinnedToCore(ADCTaskFunc, "ADC Task", 1000, NULL, 1, &ADCTask, 0);
+  xTaskCreatePinnedToCore(DMXTaskFunc, "DMX Task", 1000, NULL, 1, &DMXTask, 0);
+  xTaskCreatePinnedToCore(LEDTaskFunc, "LED Task", 1000, NULL, 2, &LEDTask, 0);
+  delay(100);
+
+  /*leds.flash(LED_B, 250, 250);
+  delay(4000);
+  leds.on(LED_R);
+  delay(2000);
+  leds.off(LED_B);
+  delay(2000);
+  leds.off(LED_R);
+  leds.on(LED_G);
+  delay(2000);
+  leds.off(LED_G);
+  delay(2000);*/
+
+  // We start by connecting to a WiFi network
+
+  Serial.println();
+  Serial.println();
+  Serial.print("Connecting to wifi...");
+  //Serial.println(ssid);
+
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_MODE_STA);
+  Serial.println("Starting WPS");
+  leds.flash(LED_B, 500, 500);
+  wpsInitConfig();
+  wpsStart();
+
+  //WiFi.begin(ssid, password);
+
+  Serial.println();
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
     delay(500);
-    digitalWrite(LED_R, LOW);
-    delay(500);
-
-    digitalWrite(LED_G, HIGH);
-    delay(500);
-    digitalWrite(LED_G, LOW);
-    delay(500);
-
-    digitalWrite(LED_B, HIGH);
-    delay(500);
-    digitalWrite(LED_B, LOW);
-    delay(500);
-  */  
-
-    xTaskCreatePinnedToCore(ADCTaskFunc, "ADC Task", 1000, NULL, 1, &ADCTask, 0);
-    xTaskCreatePinnedToCore(LEDTaskFunc, "LED Task", 1000, NULL, 2, &LEDTask, 0);
-    delay(100);
-
-    /*leds.flash(LED_B, 250, 250);
-    delay(4000);
-    leds.on(LED_R);
-    delay(2000);
-    leds.off(LED_B);
-    delay(2000);
-    leds.off(LED_R);
-    leds.on(LED_G);
-    delay(2000);
-    leds.off(LED_G);
-    delay(2000);*/
-
-    // We start by connecting to a WiFi network
-
-    Serial.println();
-    Serial.println();
-    Serial.print("Connecting to wifi...");
-    //Serial.println(ssid);
-
-    WiFi.onEvent(WiFiEvent);
-    WiFi.mode(WIFI_MODE_STA);
-    Serial.println("Starting WPS");
-    leds.flash(LED_B, 500, 500);
-    wpsInitConfig();
-    wpsStart();
-
-    //WiFi.begin(ssid, password);
-
-    Serial.println();
-    while (WiFi.status() != WL_CONNECTED) {
-      Serial.print(".");
-      delay(500);
-    }
-    
-    Serial.println("");
-    Serial.println("WiFi connected.");
-    Serial.println("IP address: ");
-    Serial.println(WiFi.localIP());
-    leds.off();
-    leds.on(LED_G);
+  }
+  
+  Serial.println("");
+  Serial.println("WiFi connected.");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  leds.off();
+  leds.on(LED_G);
 //    digitalWrite(LED_G, HIGH);
-    
-    server.begin();
+  
+  server.begin();
 
 }
 
@@ -230,7 +240,15 @@ String dmxDataToTableString() {
     s += "<tr><td>";
     s += i;
     s += "</td><td>";
-    s += String(DMXArray[i], DEC);
+    s += String((DMXArray[i]), DEC);
+    s += "</td><td>";
+    s += "<a href=\"DMX?set=";
+    s += i;
+    s += ",0\">0</a>";
+    s += "</td><td>";
+    s += "<a href=\"DMX?set=";
+    s += i;
+    s += ",255\">255</a>";
     s += "</td></tr>";
   }
   s += "</table>";
@@ -332,8 +350,8 @@ void handleResponseLED(String action) {
     }
     String idx = action.substring(0, equalsign);
     String val = action.substring(equalsign + 1, endpoint);
-    Serial.println("Index: " + idx);
-    Serial.println("Value: " + val);
+    //Serial.println("Index: " + idx);
+    //Serial.println("Value: " + val);
 
     if (idx.equalsIgnoreCase("set"))
     {
@@ -353,11 +371,29 @@ void handleResponseLED(String action) {
     {
       action = action.substring(ampersand + 1, action.length()); // Trim down action string by one pair
       equalsign = action.indexOf("=");
-      Serial.println("Next pair to be shaved!");
+      //Serial.println("Next pair to be shaved!");
     }
   }
 }
 void handleResponseDMX(String action) {
+  int timeout = 1000;
+  Serial.println("Checking DMXArray Semaphore");
+  while (DMXupdate != dmxsemaphore_t::free && timeout > 0) {
+    // Someone else is modifying the DMXArray, so we shouldn't interfere. Wait until it's free, or until we get a timeout
+    vTaskDelay(1);
+    timeout--;
+    Serial.print(".");
+  }
+  if (timeout <= 0) {
+    Serial.println("!");
+    Serial.println("DMX response handle timed out!");
+    Serial.println("!");
+    return;
+  }
+  // Acquire semaphore - we're might be changing stuff, so don't let others in...
+  DMXupdate = dmxsemaphore_t::busy;
+
+  bool updated = false;
   int equalsign = action.indexOf("=");
   while (equalsign >= 0)
   {
@@ -370,8 +406,8 @@ void handleResponseDMX(String action) {
     }
     String idx = action.substring(0, equalsign);
     String val = action.substring(equalsign + 1, endpoint);
-    Serial.println("Index: " + idx);
-    Serial.println("Value: " + val);
+    //Serial.println("Index: " + idx);
+    //Serial.println("Value: " + val);
 
     if (idx.equalsIgnoreCase("set"))
     {
@@ -384,12 +420,18 @@ void handleResponseDMX(String action) {
           //Serial.println("Address and data are both OK");
           int address_int = address.toInt();
           int data_int = data.toInt();
-          if (address_int >= 0 && address_int < 255 && data_int >= 0 && data_int < 255) { // Only act on byte values, silently discard any other silly attempts
+          if (address_int >= 0 && address_int < 512 && data_int >= 0 && data_int < 256) { // Only act on byte values, silently discard any other silly attempts
+            //Serial.println("DMXArray Update:");
+            //Serial.print(" Address: ");
+            //Serial.print(address_int);
+            //Serial.print(" Data: ");
+            //Serial.print(data_int);
+            //Serial.print("\n");
             DMXArray[address_int] = data_int;
+            updated = true; // We've updated at least one data point in the array, so this will allow us to let the semaphore know once we're done with all updates
           }
         }
       }
-      
     }
 
     // Step up to the next index=value pair
@@ -398,8 +440,16 @@ void handleResponseDMX(String action) {
     {
       action = action.substring(ampersand + 1, action.length()); // Trim down action string by one pair
       equalsign = action.indexOf("=");
-      Serial.println("Next pair to be shaved!");
+      //Serial.println("Next pair to be shaved!");
     }
+  }
+  // Handle semaphore - did we modify anything?
+  if (updated) {
+    DMXupdate = dmxsemaphore_t::updated;
+    //Serial.println("Leaving DMX Handle. Semaphore set to updated.");
+  } else {
+    DMXupdate = dmxsemaphore_t::free;
+    //Serial.println("Leaving DMX Handle. Semaphore set to free.");
   }
 }
 void sendHTTPResponse(WiFiClient client, String resource) {
@@ -413,7 +463,7 @@ void sendHTTPResponse(WiFiClient client, String resource) {
   client.print("Click <a href=\"/LED?set=on\">here</a> to turn the LED on pin 2 on.<br>");
   client.print("Click <a href=\"/LED?set=off\">here</a> to turn the LED on pin 2 off.<br>");
   client.print("Click <a href=\"/DMX\">here</a> to see DMX data.<br>");
-  client.print("Click <a href=\"/ADC\">here</a> to check ADC voltage readings");
+  //client.print("Click <a href=\"/ADC\">here</a> to check ADC voltage readings");
   if (resource.equalsIgnoreCase("ADC")) { // Analog voltage monitor page
     client.print(voltageMonitorToString());
     client.print("<br>");
@@ -482,4 +532,28 @@ void LEDTaskFunc (void * p) {
     vTaskDelay(1);
   }
   
+}
+void DMXTaskFunc (void * p ) {
+  //unsigned long lastrun = millis();
+  Serial.println("DMX Task is running");
+  while(true) {
+    if(DMXupdate == dmxsemaphore_t::updated) {
+      //Serial.println("DMXTask found semaphore set to Updated. Will now copy memory.");
+      memcpy(&DMXdata[1], DMXArray, DMXArraySize); // Copy to DMXdata + 1, because DMXdata[0] contains magic
+      dmx_write(dmxPort, DMXdata, DMX_PACKET_SIZE);
+      DMXupdate = dmxsemaphore_t::free; // Unset semaphore
+      //Serial.println("DMXTask set semaphore back to Free.");
+    }
+    //Serial.println("DMX Task: Sending packet.");
+    dmx_send_num(dmxPort, DMX_PACKET_SIZE);
+    //Serial.println("DMX Task: Packet sent to driver.");
+    dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
+    //Serial.println("DMX Task: Driver reports packet sent.");
+    vTaskDelay(1);
+    //while (millis() - lastrun < 1000) {
+    //  NOP();
+    //}
+    //lastrun = millis();
+    //Serial.print("-");
+  }
 }
