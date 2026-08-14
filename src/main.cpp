@@ -183,18 +183,34 @@ void setup()
 
   WiFi.onEvent(WiFiEvent);
   WiFi.mode(WIFI_MODE_STA);
-  Serial.println("Starting WPS");
-  leds.flash(LED_B, 500, 500);
-  wpsInitConfig();
-  wpsStart();
 
-  //WiFi.begin(ssid, password);
-
-  Serial.println();
+  Serial.println("Attempting stored WiFi credentials");
+  leds.flash(LED_G, 250, 250);
+  WiFi.begin();
+  int timeout = 20;
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
     delay(500);
+    timeout--;
+    if (timeout <= 0) {
+      Serial.println("Failed to connect to stored WiFi credentials, starting WPS");
+      leds.off();
+      leds.flash(LED_B, 500, 500);
+      wpsInitConfig();
+      wpsStart();
+        Serial.println();
+        while (WiFi.status() != WL_CONNECTED) {
+          Serial.print(".");
+          delay(500);
+        }
+
+      break;
+    }
   }
+
+  
+  //WiFi.begin(ssid, password);
+
   
   Serial.println("");
   Serial.println("WiFi connected.");
