@@ -9,6 +9,9 @@ ESP32 Wifi DMX Bridge - based on sample projects cobbled together and expanded..
 #define ESP_MODEL_NAME    "Olimex board"
 #define ESP_DEVICE_NAME   "DMX Remote"
 
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
 static esp_wps_config_t config;
 
 // Server stuff
@@ -29,6 +32,7 @@ TaskHandle_t ADCTask, LEDTask, DMXTask;
 #define DMX_RX 16
 #define DMX_TX 17
 #define DMX_EN 22
+#define BUTTON 23
 
 //LEDs
 StatusLed leds(LED_G, LED_B, LED_R);
@@ -135,12 +139,18 @@ void WiFiEvent(WiFiEvent_t event, arduino_event_info_t info){
 void setup()
 {
   Serial.begin(115200);
+  delay(1000);
+  Serial.println();
+  Serial.println("ESP32 Wifi DMX Bridge, cobbled together by Zhorts");
+  Serial.printf("Firmware build #%s (%s), compiled %s %s\n", TOSTRING(BUILD_NUMBER), GIT_VERSION, __DATE__, __TIME__);
+
   pinMode(LED, OUTPUT);      // set the LED pin mode
   pinMode(LED_R, OUTPUT);
   pinMode(LED_G, OUTPUT);
   pinMode(LED_B, OUTPUT);
   pinMode(VBAT, INPUT);
   pinMode(VEXT, INPUT);
+  pinMode(BUTTON, INPUT_PULLUP);
   
   // DMX setup
   memset(DMXArray, 0, DMXArraySize);
@@ -155,30 +165,60 @@ void setup()
   dmx_set_pin(dmxPort, transmitPin, receivePin, enablePin);
 
   // All done, wait a bit to let things settle for no particular reason.
-  delay(1000);
+  delay(100);
 
   //xTaskCreatePinnedToCore(ADCTaskFunc, "ADC Task", 1000, NULL, 1, &ADCTask, 0);
   xTaskCreatePinnedToCore(DMXTaskFunc, "DMX Task", 1000, NULL, 1, &DMXTask, 0);
   xTaskCreatePinnedToCore(LEDTaskFunc, "LED Task", 1000, NULL, 2, &LEDTask, 0);
   delay(100);
 
-  /*leds.flash(LED_B, 250, 250);
-  delay(4000);
-  leds.on(LED_R);
-  delay(2000);
-  leds.off(LED_B);
-  delay(2000);
-  leds.off(LED_R);
-  leds.on(LED_G);
-  delay(2000);
-  leds.off(LED_G);
-  delay(2000);*/
+  // Check button input on boot to see if we should force WPS mode, or just try to connect to stored credentials
+  int counter = 0;
+  int buttoncount = 0;
+  bool forceWPS = false;
+  while (counter < 100) {
+    if (digitalRead(BUTTON) == LOW) {
+      buttoncount++;
+    }
+    counter++;
+    delay(1);
+  }
+  if (buttoncount > 75) { // Button was pressed for at least 75% of 100 ms, go to check state for WPS mode
+    leds.on(LED_B);
+    counter = 0;
+    buttoncount = 0;
+    while (buttoncount >= 0) { // Check if button remains pressed
+      if (digitalRead(BUTTON) == LOW) {
+        buttoncount++;
+      } else {
+        buttoncount--;
+      }
+      counter++;
+      if (buttoncount > 1000 or counter > 10000) {
+        if (buttoncount > 1000) {
+          Serial.println("Button pressed for more than 5 seconds, forcing WPS mode");
+          forceWPS = true;
+        } else {
+          Serial.println("Button released before timeout, attempting stored WiFi credentials");
+        }
+        break;
+      }
+      delay(5);
+      if (buttoncount > 0) leds.on(LED_B);
+      else if (buttoncount > 200) leds.flash(LED_B, 400,400);
+      else if (buttoncount > 400) leds.flash(LED_B, 200,200);
+      else if (buttoncount > 600) leds.flash(LED_B, 100,100);
+      else if (buttoncount > 800) leds.flash(LED_B, 50,50);
+      else if (buttoncount > 1000) leds.on(LED_B);
+      else {leds.off(); leds.on(LED_R);}
+    }
+  }
+
 
   // We start by connecting to a WiFi network
 
   Serial.println();
-  Serial.println();
-  Serial.print("Connecting to wifi...");
+  Serial.print("Connecting to wifi... ");
   //Serial.println(ssid);
 
   WiFi.onEvent(WiFiEvent);
@@ -214,7 +254,7 @@ void setup()
   
   Serial.println("");
   Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   leds.off();
   leds.on(LED_G);
